@@ -15,7 +15,7 @@ os.environ['QT_QPA_PLATFORM'] = 'xcb'
 os.environ['GDK_BACKEND'] = 'x11'
 os.environ['XDG_SESSION_TYPE'] = 'x11'
 
-from PyQt6.QtWidgets import QApplication, QWidget, QMainWindow, QLabel, QVBoxLayout, QHBoxLayout, QSlider, QPushButton, QComboBox
+from PyQt6.QtWidgets import QApplication, QWidget, QMainWindow, QLabel, QVBoxLayout, QHBoxLayout, QSlider, QPushButton, QComboBox, QSpinBox
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon
 
@@ -33,7 +33,7 @@ def get_window_handle(widget):
     hangle = widget.windowHandle().winId()
     return int(hangle)
 
-class MainWindow(QMainWindow):
+class MainWindowCam(QMainWindow):
     def __init__(self):
         super().__init__()
 
@@ -70,7 +70,8 @@ class MainWindow(QMainWindow):
         #self.btn_stop = QPushButton("Stop", self)
         
         self.btn_stop = QPushButton("", self)
-        self.btn_pause = QPushButton("", self)
+        self.btn_connect = QPushButton("Connect", self)
+        self.sb_port = QSpinBox(self)
         #image for icons
         self.btn_play.setIcon(QIcon("PlayVideo.png"))
         #self.btn_pause.setIcon(QIcon("Pause.png"))
@@ -78,8 +79,17 @@ class MainWindow(QMainWindow):
 
         layou_ctrl.addWidget(self.btn_play)
         layou_ctrl.addWidget(self.btn_stop)
-        layou_ctrl.addWidget(self.btn_pause)
+        layou_ctrl.addWidget(self.btn_connect)
+        layou_ctrl.addWidget(self.sb_port)
+        self.sb_port.setMaximum(65535)
+        self.sb_port.setMinimum(0)
+        self.sb_port.setValue(5000)
         
+        self.btn_connect.setCheckable(True)
+        self.btn_connect.clicked.connect(self.on_connect_clicked)
+        
+        self.btn_play.clicked.connect(self.on_play_clicked)
+        self.btn_stop.clicked.connect(self.on_stop_clicked)
 
         layou_ctrl.addStretch(1)# btns to left
 
@@ -152,6 +162,26 @@ class MainWindow(QMainWindow):
         if self.pipeline:
             sound = self.pipeline.get_by_name("vol")
             sound.set_property("volume", self.sound.value() / 100)
+            
+    def on_play_clicked(self):
+        if self.pipeline:
+            self.pipeline.set_state(Gst.State.PLAYING)
+            print('restarted')
+    
+    def on_stop_clicked(self):
+        if self.pipeline:
+            self.pipeline.set_state(Gst.State.PAUSED)#READY)
+            print('stoped')
+            
+    #def createPipeline(self):
+    def on_connect_clicked(self):
+        if self.pipeline:
+            state = self.pipeline.set_state(Gst.State.NULL)
+            src = self.pipeline.get_by_name("src")
+            
+    
+    # def on_connect_clicked(self):
+    #     pass
     
     def timeEvent(self):
          (ok, current)=self.pipeline.query_position(Gst.Format.TIME)
@@ -159,6 +189,7 @@ class MainWindow(QMainWindow):
             self.current_time=current 
             self.progress.setValue(int(current * 1e-9))
             #self.progress.selValue(self.current_time)
+            
 
  
 """        
