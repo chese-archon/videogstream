@@ -1,12 +1,3 @@
-# import sys
-# from PyQt6.QtWidgets import QApplication, QWidget, QMainWindow, QLabel, QVBoxLayout, QHBoxLayout, QSlider, QPushButton, QComboBox
-# from PyQt6.QtCore import Qt, QTimer
-# from PyQt6.QtGui import QIcon
-# import gi
-# gi.require_version('Gst', '1.0')
-# gi.require_version('GstVideo', '1.0')
-# from gi.repository import Gst, GObject, GstVideo
-
 import os
 import sys
 import threading
@@ -35,7 +26,7 @@ def get_window_handle(widget):
     hangle = widget.windowHandle().winId()
     return int(hangle)
 
-# Класс для сигналов конвертации
+# convert signals
 class ConversionSignals(QObject):
     progress = pyqtSignal(int)
     finished = pyqtSignal(bool, str)
@@ -51,12 +42,10 @@ class MainWindow(QMainWindow):
         layout_main = QVBoxLayout()
         self.central_widget.setLayout(layout_main)
 
-        # Инициализация переменных для конвертации
         self.conversion_thread = None
         self.conversion_signals = ConversionSignals()
         self.source_file = "/home/anna/Загрузки/cat.mp4"
         
-        # Подключаем сигналы конвертации
         self.conversion_signals.progress.connect(self.on_conversion_progress)
         self.conversion_signals.finished.connect(self.on_conversion_finished)
         self.conversion_signals.error.connect(self.on_conversion_error)
@@ -286,7 +275,7 @@ class MainWindow(QMainWindow):
         elif target_format == "mov":
             muxer = "qtmux name=mux ! filesink location=\""
         elif target_format == "webm":
-            # WebM использует другие кодеки
+            # WebM another codec
             return (
                 f"filesrc location=\"{input_file}\" ! "
                 "decodebin name=dec ! "
