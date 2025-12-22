@@ -3,6 +3,7 @@ import sys
 import threading
 from datetime import datetime
 
+# Настройки окружения ДО импортов GStreamer
 os.environ['QT_QPA_PLATFORM'] = 'xcb'
 os.environ['GDK_BACKEND'] = 'x11'
 os.environ['XDG_SESSION_TYPE'] = 'x11'
@@ -71,6 +72,8 @@ class MainWindow(QMainWindow):
         layout_main.addLayout(layou_ctrl)
 
         self.btn_play = QPushButton("", self)
+        #self.btn_pause = QPushButton("Pause", self)
+        #self.btn_stop = QPushButton("Stop", self)
         self.btn_pause = QPushButton("", self)
         self.btn_reload = QPushButton("", self)
         
@@ -97,7 +100,7 @@ class MainWindow(QMainWindow):
         
         # TABLITSA
         self.grid_layout = QGridLayout()
-        self.grid_layout.setSpacing(10) 
+        self.grid_layout.setSpacing(10)  # Расстояние между ячейками
         self.grid_layout.setContentsMargins(20, 0, 40, 0)
         
         # tabel text header
@@ -123,13 +126,18 @@ class MainWindow(QMainWindow):
         
         # resolution input params        
         self.resolution_input = QLineEdit()
-        self.resolution_input.setPlaceholderText("1280x720 or 1080p")
-        self.resolution_input.textChanged.connect(self.validate_resolution)
+        self.resolution_input.setPlaceholderText("1280x720")
         self.grid_layout.addWidget(self.resolution_input, 1, 2)
         
         layou_ctrl.addLayout(self.grid_layout)
         
+        
+
         #convert video
+        # self.video_type = QComboBox(self)
+        # self.video_type.addItems(("MP4", "MKV", "MOV", "WebM"))
+
+        #layou_ctrl.addWidget(self.video_type)
         self.btn_convert = QPushButton("Convert", self)
         self.btn_convert.clicked.connect(self.start_conversion)
         layou_ctrl.addWidget(self.btn_convert)
@@ -153,140 +161,6 @@ class MainWindow(QMainWindow):
         
         self.createPipeline()
         self.sound.setValue(50)
-
-    def validate_resolution(self, text):
-        if text.strip():
-            width, height = self.parse_resolution(text)
-            if width is not None and height is not None:
-                self.resolution_input.setToolTip(f"Resolution: {width}x{height}")
-        else:
-            self.resolution_input.setToolTip("riginal video resolution")
-
-    def parse_resolution(self, resolution_str):
-        try:
-            clean_str = resolution_str.strip().lower()
-            for sep in ['x', '*', 'х']:
-                if sep in clean_str:
-                    parts = clean_str.split(sep)
-                    if len(parts) == 2:
-                        width = int(parts[0].strip())
-                        height = int(parts[1].strip())
-                        if width > 0 and height > 0 and width <= 7680 and height <= 4320:  # 8K max
-                            return width, height
-                        else:
-                            return None, None
-        except (ValueError, AttributeError):
-            print("parse error")
-        return None, None # use resolution from orig
-
-    def get_video_encoder(self, codec_name, width=None, height=None):
-        codec_configs = {
-            "h.264": {
-                "encoder": "x264enc",
-                "params": "bitrate=2000 speed-preset=medium",
-            },
-            "h.265 (hevc)": {
-                "encoder": "x265enc",
-                "params": "bitrate=1500 speed-preset=medium",
-            },
-            "vp9": {
-                "encoder": "vp9enc",
-                "params": "target-bitrate=2000000 cpu-used=4",
-            },
-            "av1": {
-                "encoder": "av1enc",
-                "params": "target-bitrate=1000000 cpu-used=6",
-            },
-            "mpeg-4": {
-                "encoder": "avenc_mpeg4",
-                "params": "bitrate=2000",
-            },
-            "xvid": {
-                "encoder": "xvidenc",
-                "params": "bitrate=2000",
-            },
-        }
-        
-        codec_lower = codec_name.lower()
-        for key, config in codec_configs.items():
-            if key in codec_lower:
-                return f"{config['encoder']} {config['params']}"
-        
-        # use H.264 by default
-        return "x264enc bitrate=2000 speed-preset=medium"
-
-    def get_conversion_pipeline(self, input_file, output_file, target_format, target_codec, target_resolution):
-        width, height = self.parse_resolution(target_resolution)
-        
-        base_pipeline = (
-            f"filesrc location=\"{input_file}\" ! "
-            "decodebin name=dec ! "
-            "queue ! "
-            "videoconvert ! "
-        )
-        
-        if width is not None and height is not None:
-            base_pipeline += f"videoscale ! video/x-raw,width={width},height={height} ! "
-            print(f"Using resolution: {width}x{height}")
-        else:
-            print("Using original video resolution")
-        
-        video_encoder = self.get_video_encoder(target_codec, width, height)
-        
-        pipeline_middle = (
-            f"{video_encoder} ! "
-            "queue ! "
-            "mux. "
-            "dec. ! "
-            "queue ! "
-            "audioconvert ! "
-            "audioresample ! "
-            "autoaudiosink "
-            "voaacenc bitrate=128000 ! "   
-            "queue ! "
-            "mux. "
-        )
-        
-        if target_format == "mp4":
-            muxer = "mp4mux name=mux ! filesink location=\""
-        elif target_format == "mkv":
-            muxer = "matroskamux name=mux ! filesink location=\""
-        elif target_format == "mov":
-            muxer = "qtmux name=mux ! filesink location=\""
-        elif target_format == "webm":
-            # for WebM use VP8/VP9 and Vorbis/Opus
-            vp_encoder = "vp8enc"
-            if "vp9" in target_codec.lower():
-                vp_encoder = "vp9enc"
-                        
-            scale_webm = ""
-            if width is not None and height is not None:
-                scale_webm = f"videoscale ! video/x-raw,width={width},height={height} ! "
-                print(f"WebM using resolution: {width}x{height}")
-                
-            return (
-                f"filesrc location=\"{input_file}\" ! "
-                "decodebin name=dec ! "
-                "queue ! "
-                "videoconvert ! "
-                f"{scale_webm}"
-                f"{vp_encoder} target-bitrate=2000000 cpu-used=4 ! "
-                "queue ! "
-                "webmmux name=mux ! "
-                "filesink location=\""
-                f"{output_file}\" "
-                "dec. ! "
-                "queue ! "
-                "audioconvert ! "
-                "audioresample ! "
-                "vorbisenc ! "
-                "queue ! "
-                "mux."
-            )
-        else:
-            return None
-        
-        return base_pipeline + pipeline_middle + muxer + f"{output_file}\""
 
     def on_select_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -339,22 +213,11 @@ class MainWindow(QMainWindow):
         
         # get place for converted video
         target_format = self.video_type.currentText().lower()
-        codec_name = self.codec_type.currentText()
-        
-        # get resolution
-        target_resolution = self.resolution_input.text()
-        width, height = self.parse_resolution(target_resolution)
-        
-        if width is not None and height is not None:
-            resolution_suffix = f"_{width}x{height}"
-        else:
-            resolution_suffix = "_original"
-        
-        default_name = f"converted_{codec_name.replace(' ', '_')}{resolution_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{target_format}"
+        default_name = f"converted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{target_format}"
         
         output_path, _ = QFileDialog.getSaveFileName(
             self,
-            f"Save as {target_format.upper()} ({codec_name})",
+            f"Save as {target_format.upper()}",
             default_name,
             f"{target_format.upper()} Files (*.{target_format});;All Files (*)"
         )
@@ -368,8 +231,9 @@ class MainWindow(QMainWindow):
         self.btn_convert.setEnabled(False)
         self.btn_select.setEnabled(False)
         
-        # get codec
-        target_codec = self.codec_type.currentText()
+        # get codec & resolution
+        target_codec = self.codec_type.currentText().lower()
+        target_resolution = self.resolution_input.text()
         
         self.conversion_thread = threading.Thread(
             target=self.convert_video,
@@ -379,16 +243,9 @@ class MainWindow(QMainWindow):
         self.conversion_thread.start()
 
     def convert_video(self, input_file, output_file, target_format, target_codec, target_resolution):
-        print(f"Input: {input_file}")
-        print(f"Output: {output_file}")
-        print(f"Format: {target_format}")
-        print(f"Codec: {target_codec}")
-        print(f"Resolution: {target_resolution}")
-        
+        print(input_file, output_file, target_format, target_codec, target_resolution)
         try:
-            pipeline_str = self.get_conversion_pipeline(
-                input_file, output_file, target_format, target_codec, target_resolution
-            )
+            pipeline_str = self.get_conversion_pipeline(input_file, output_file, target_format)
             
             if not pipeline_str:
                 self.conversion_signals.error.emit(f"Unsupported format: {target_format}")
@@ -432,6 +289,56 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             self.conversion_signals.error.emit(f"Conversion failed: {str(e)}")
+
+    def get_conversion_pipeline(self, input_file, output_file, target_format):        
+        base_pipeline = (
+            f"filesrc location=\"{input_file}\" ! "
+            "decodebin name=dec ! "
+            "queue ! "
+            "videoconvert ! "
+            "x264enc bitrate=2000 speed-preset=medium ! "
+            "queue ! "
+            "mux. "
+            "dec. ! "
+            "queue ! "
+            "audioconvert ! "
+            "audioresample ! "
+            #"avenc_aac bitrate=128000 ! "
+            "voaacenc bitrate=128000 ! "
+            "queue ! "
+            "mux. "
+        )
+        
+        if target_format == "mp4":
+            muxer = "mp4mux name=mux ! filesink location=\""
+        elif target_format == "mkv":
+            muxer = "matroskamux name=mux ! filesink location=\""
+        elif target_format == "mov":
+            muxer = "qtmux name=mux ! filesink location=\""
+        elif target_format == "webm":
+            # WebM another codec
+            return (
+                f"filesrc location=\"{input_file}\" ! "
+                "decodebin name=dec ! "
+                "queue ! "
+                "videoconvert ! "
+                "vp8enc target-bitrate=2000000 cpu-used=4 ! "
+                "queue ! "
+                "webmmux name=mux ! "
+                "filesink location=\""
+                f"{output_file}\" "
+                "dec. ! "
+                "queue ! "
+                "audioconvert ! "
+                "audioresample ! "
+                "vorbisenc ! "
+                "queue ! "
+                "mux."
+            )
+        else:
+            return None
+        
+        return base_pipeline + muxer + f"{output_file}\""
 
     def on_conversion_progress(self, value):
         self.conversion_progress.setValue(value)
@@ -507,3 +414,4 @@ class MainWindow(QMainWindow):
             if(ok):
                 self.current_time = current
                 self.progress.setValue(int(current * 1e-9))
+    
