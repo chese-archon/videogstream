@@ -36,6 +36,8 @@ class MainWindow(QMainWindow):
         self.record_file = ""
         
         self.zoom_factor = 1.0
+        self.pan_x = 0
+        self.pan_y = 0
         
         self.update_status_signal.connect(self._update_status)
         
@@ -102,7 +104,8 @@ class MainWindow(QMainWindow):
         control_panel.addWidget(self.btn_stop)
         control_panel.addStretch()
         
-        control_panel.addWidget(QLabel("Zoom:"))
+        zoom_layout = QHBoxLayout()
+        zoom_layout.addWidget(QLabel("Zoom:"))
         
         self.btn_zoom_in = QPushButton("Увеличить")
         self.btn_zoom_in.clicked.connect(self.zoom_in)
@@ -116,9 +119,47 @@ class MainWindow(QMainWindow):
         self.btn_reset_zoom.clicked.connect(self.reset_zoom)
         self.btn_reset_zoom.setEnabled(False)
         
-        control_panel.addWidget(self.btn_zoom_in)
-        control_panel.addWidget(self.btn_zoom_out)
-        control_panel.addWidget(self.btn_reset_zoom)
+        zoom_layout.addWidget(self.btn_zoom_in)
+        zoom_layout.addWidget(self.btn_zoom_out)
+        zoom_layout.addWidget(self.btn_reset_zoom)
+        
+        control_panel.addLayout(zoom_layout)
+        control_panel.addStretch()
+        
+        pan_layout = QHBoxLayout()
+        pan_layout.addWidget(QLabel("Перемещение:"))
+        
+        self.btn_left = QPushButton("←")
+        self.btn_left.clicked.connect(self.move_left)
+        self.btn_left.setEnabled(False)
+        self.btn_left.setFixedWidth(40)
+        
+        self.btn_right = QPushButton("→")
+        self.btn_right.clicked.connect(self.move_right)
+        self.btn_right.setEnabled(False)
+        self.btn_right.setFixedWidth(40)
+        
+        self.btn_up = QPushButton("↑")
+        self.btn_up.clicked.connect(self.move_up)
+        self.btn_up.setEnabled(False)
+        self.btn_up.setFixedWidth(40)
+        
+        self.btn_down = QPushButton("↓")
+        self.btn_down.clicked.connect(self.move_down)
+        self.btn_down.setEnabled(False)
+        self.btn_down.setFixedWidth(40)
+        
+        self.btn_center = QPushButton("Центр")
+        self.btn_center.clicked.connect(self.reset_position)
+        self.btn_center.setEnabled(False)
+        
+        pan_layout.addWidget(self.btn_left)
+        pan_layout.addWidget(self.btn_right)
+        pan_layout.addWidget(self.btn_up)
+        pan_layout.addWidget(self.btn_down)
+        pan_layout.addWidget(self.btn_center)
+        
+        control_panel.addLayout(pan_layout)
         control_panel.addStretch()
         
         self.btn_record = QPushButton("Запись")
@@ -197,7 +238,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "ОШИБКА", f"Ошибка создания пайплайна: {str(e)}")
             return False
     
-    def apply_zoom(self):
+    def apply_crop(self):
         try:
             if not self.pipeline or not self.is_playing:
                 return
@@ -209,30 +250,47 @@ class MainWindow(QMainWindow):
             video_width = 320
             video_height = 240
             
-            crop_width = max(10, int(video_width / self.zoom_factor))
-            crop_height = max(10, int(video_height / self.zoom_factor))
+            if self.zoom_factor <= 1.0:
+                crop_width = video_width
+                crop_height = video_height
+            else:
+                crop_width = max(10, int(video_width / self.zoom_factor))
+                crop_height = max(10, int(video_height / self.zoom_factor))
             
-            left = (video_width - crop_width) // 2
-            top = (video_height - crop_height) // 2
+            max_pan_x = max(0, (video_width - crop_width) // 2)
+            max_pan_y = max(0, (video_height - crop_height) // 2)
+            
+            self.pan_x = max(-max_pan_x, min(max_pan_x, self.pan_x))
+            self.pan_y = max(-max_pan_y, min(max_pan_y, self.pan_y))
+            
+            center_x = (video_width - crop_width) // 2
+            center_y = (video_height - crop_height) // 2
+            
+            left = center_x + self.pan_x
+            top = center_y + self.pan_y
             
             crop_filter.set_property("left", left)
             crop_filter.set_property("top", top)
-            crop_filter.set_property("right", left)
-            crop_filter.set_property("bottom", top)
+            crop_filter.set_property("right", video_width - crop_width - left)
+            crop_filter.set_property("bottom", video_height - crop_height - top)
             
+            status_text = "Воспроизведение"
             if self.zoom_factor > 1.0:
-                self.update_status_signal.emit(f"Воспроизведение. Zoom: {self.zoom_factor:.1f}x")
-            else:
-                self.update_status_signal.emit("Воспроизведение")
+                status_text += f" Zoom: {self.zoom_factor:.1f}x"
+                if self.pan_x != 0 or self.pan_y != 0:
+                    status_text += f" Смещение: X:{self.pan_x} Y:{self.pan_y}"
+            
+            self.update_status_signal.emit(status_text)
                 
         except Exception as e:
-            print(f"ОШИБКА ПРИМЕНЕНИЯ ЗУМА: {e}")
+            print(f"ОШИБКА ПРИМЕНЕНИЯ ОБРЕЗКИ: {e}")
     
     def zoom_in(self):
         try:
             if self.zoom_factor < 4.0:
                 self.zoom_factor += 0.5
-                self.apply_zoom()
+                self.apply_crop()
+                self.update_pan_buttons_state()
         except Exception as e:
             print(f"ОШИБКА УВЕЛИЧЕНИЯ ЗУМА: {e}")
     
@@ -240,16 +298,67 @@ class MainWindow(QMainWindow):
         try:
             if self.zoom_factor > 1.0:
                 self.zoom_factor -= 0.5
-                self.apply_zoom()
+                if self.zoom_factor <= 1.0:
+                    self.reset_position()
+                self.apply_crop()
+                self.update_pan_buttons_state()
         except Exception as e:
             print(f"ОШИБКА УМЕНЬШЕНИЯ ЗУМА: {e}")
     
     def reset_zoom(self):
         try:
             self.zoom_factor = 1.0
-            self.apply_zoom()
+            self.reset_position()
         except Exception as e:
             print(f"ОШИБКА СБРОСА ЗУМА: {e}")
+    
+    def move_left(self):
+        try:
+            if self.zoom_factor > 1.0:
+                self.pan_x -= 10
+                self.apply_crop()
+        except Exception as e:
+            print(f"ОШИБКА ДВИЖЕНИЯ ВЛЕВО: {e}")
+    
+    def move_right(self):
+        try:
+            if self.zoom_factor > 1.0:
+                self.pan_x += 10
+                self.apply_crop()
+        except Exception as e:
+            print(f"ОШИБКА ДВИЖЕНИЯ ВПРАВО: {e}")
+    
+    def move_up(self):
+        try:
+            if self.zoom_factor > 1.0:
+                self.pan_y -= 10
+                self.apply_crop()
+        except Exception as e:
+            print(f"ОШИБКА ДВИЖЕНИЯ ВВЕРХ: {e}")
+    
+    def move_down(self):
+        try:
+            if self.zoom_factor > 1.0:
+                self.pan_y += 10
+                self.apply_crop()
+        except Exception as e:
+            print(f"ОШИБКА ДВИЖЕНИЯ ВНИЗ: {e}")
+    
+    def reset_position(self):
+        try:
+            self.pan_x = 0
+            self.pan_y = 0
+            self.apply_crop()
+        except Exception as e:
+            print(f"ОШИБКА СБРОСА ПОЗИЦИИ: {e}")
+    
+    def update_pan_buttons_state(self):
+        can_pan = self.zoom_factor > 1.0 and self.is_playing
+        self.btn_left.setEnabled(can_pan)
+        self.btn_right.setEnabled(can_pan)
+        self.btn_up.setEnabled(can_pan)
+        self.btn_down.setEnabled(can_pan)
+        self.btn_center.setEnabled(can_pan)
     
     def connect_to_stream(self):
         try:
@@ -271,6 +380,7 @@ class MainWindow(QMainWindow):
                 self.btn_zoom_in.setEnabled(True)
                 self.btn_zoom_out.setEnabled(True)
                 self.btn_reset_zoom.setEnabled(True)
+                self.update_pan_buttons_state()
                 self.update_status_signal.emit(f"Подключено. Нажмите 'Воспроизвести'")
             else:
                 self.update_status_signal.emit("ОШИБКА ПОДКЛЮЧЕНИЯ")
@@ -290,7 +400,8 @@ class MainWindow(QMainWindow):
                     self.is_playing = True
                     self.btn_play.setText("Пауза")
                     self.btn_stop.setEnabled(True)
-                    self.update_status_signal.emit("Воспроизведение")
+                    self.update_pan_buttons_state()
+                    self.apply_crop()
                 else:
                     self.update_status_signal.emit("ОШИБКА ЗАПУСКА")
             else:
@@ -298,6 +409,7 @@ class MainWindow(QMainWindow):
                 self.is_playing = False
                 self.btn_play.setText("Воспроизвести")
                 self.update_status_signal.emit("Пауза")
+                self.update_pan_buttons_state()
                 
         except Exception as e:
             QMessageBox.critical(self, "ОШИБКА", f"Ошибка переключения воспроизведения: {str(e)}")
@@ -320,10 +432,12 @@ class MainWindow(QMainWindow):
                 self.connect_btn.setEnabled(True)
                 self.connect_btn.setText("Подключиться")
                 self.update_status_signal.emit("Остановлено")
+                self.update_pan_buttons_state()
                 
                 self.video_label.show()
                 self.video_label.setText("Видео остановлено")
                 self.zoom_factor = 1.0
+                self.reset_position()
                 
         except Exception as e:
             QMessageBox.critical(self, "ОШИБКА", f"Ошибка остановки: {str(e)}")
