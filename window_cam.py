@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QMainWindow, QLabel,
                            QVBoxLayout, QHBoxLayout, QSlider, QPushButton, 
                            QComboBox, QSpinBox, QLineEdit, QFileDialog, 
                            QMessageBox, QGroupBox)
-from PyQt6.QtCore import Qt, QTimer, QEvent
+from PyQt6.QtCore import Qt, QTimer, QEvent, QRect
 from PyQt6.QtGui import QFont
 
 # === КРИТИЧЕСКИ ВАЖНЫЕ НАСТРОЙКИ ===
@@ -36,10 +36,11 @@ class MainWindow(QMainWindow):
         
         # Переменные для управления видео
         self.pipeline = None
+        self.video_sink = None
         self.is_playing = False
         self.zoom_factor = 1.0
-        self.pan_x = 0
-        self.pan_y = 0
+        self.pan_x = 0.5
+        self.pan_y = 0.5
         self.current_source = VideoSource.UDP_STREAM
         self.video_window_id = None
         
@@ -47,6 +48,7 @@ class MainWindow(QMainWindow):
         self.record_pipeline = None
         self.is_recording = False
         self.record_file = ""
+        self.tee_element = None  # Элемент для разделения потока
         
         # Инициализация UI
         self.init_ui()
@@ -185,6 +187,28 @@ class MainWindow(QMainWindow):
         self.btn_zoom_in.setEnabled(False)
         control_panel.addWidget(self.btn_zoom_in)
         
+        # Панорамирование
+        control_panel.addWidget(QLabel("Панорамирование:"))
+        self.btn_pan_left = QPushButton("←")
+        self.btn_pan_left.clicked.connect(lambda: self.adjust_pan(-0.1, 0))
+        self.btn_pan_left.setEnabled(False)
+        control_panel.addWidget(self.btn_pan_left)
+        
+        self.btn_pan_right = QPushButton("→")
+        self.btn_pan_right.clicked.connect(lambda: self.adjust_pan(0.1, 0))
+        self.btn_pan_right.setEnabled(False)
+        control_panel.addWidget(self.btn_pan_right)
+        
+        self.btn_pan_up = QPushButton("↑")
+        self.btn_pan_up.clicked.connect(lambda: self.adjust_pan(0, -0.1))
+        self.btn_pan_up.setEnabled(False)
+        control_panel.addWidget(self.btn_pan_up)
+        
+        self.btn_pan_down = QPushButton("↓")
+        self.btn_pan_down.clicked.connect(lambda: self.adjust_pan(0, 0.1))
+        self.btn_pan_down.setEnabled(False)
+        control_panel.addWidget(self.btn_pan_down)
+        
         control_panel.addStretch()
         
         # Запись
@@ -294,18 +318,24 @@ class MainWindow(QMainWindow):
             if self.video_window_id is None:
                 self.video_window_id = self.get_window_handle()
             
-            # Используем xvimagesink с привязкой к окну
+            # Используем более сложный пайплайн с tee для записи и видео
             pipeline_str = (
                 f'udpsrc port={port} ! '
                 'application/x-rtp ! '
                 'rtph264depay ! '
+                'h264parse ! '
+                'tee name=t ! '
+                'queue ! '
                 'decodebin ! '
                 'videoconvert ! '
-                'xvimagesink name=vsink'
+                'videoscale ! '
+                'xvimagesink name=vsink '
+                't. ! queue ! h264parse ! mux. '
+                'avimux name=mux ! fakesink'
             )
             
-            print("Создаем пайплайн с xvimagesink:")
-            print(f"   {pipeline_str}")
+            print("Создаем пайплайн для UDP потока:")
+            print(f"   IP: {ip}, Порт: {port}")
             print(f"   Window ID: {self.video_window_id}")
             
             self.pipeline = Gst.parse_launch(pipeline_str)
@@ -316,11 +346,11 @@ class MainWindow(QMainWindow):
                 return False
             
             # Получаем элемент xvimagesink
-            sink = self.pipeline.get_by_name("vsink")
-            if sink:
+            self.video_sink = self.pipeline.get_by_name("vsink")
+            if self.video_sink:
                 # Привязываем к окну PyQt
-                sink.set_property("force-aspect-ratio", True)
-                sink.set_window_handle(self.video_window_id)
+                self.video_sink.set_property("force-aspect-ratio", True)
+                self.video_sink.set_window_handle(self.video_window_id)
                 print("Видео привязано к окну PyQt")
             
             # Настраиваем обработку сообщений
@@ -346,6 +376,10 @@ class MainWindow(QMainWindow):
                 self.btn_record.setEnabled(True)
                 self.btn_zoom_in.setEnabled(True)
                 self.btn_zoom_out.setEnabled(True)
+                self.btn_pan_left.setEnabled(True)
+                self.btn_pan_right.setEnabled(True)
+                self.btn_pan_up.setEnabled(True)
+                self.btn_pan_down.setEnabled(True)
                 
                 # Скрываем текстовый label
                 self.video_status_label.hide()
@@ -391,6 +425,7 @@ class MainWindow(QMainWindow):
                 f'filesrc location="{filename}" ! '
                 'decodebin ! '
                 'videoconvert ! '
+                'videoscale ! '
                 'xvimagesink name=vsink'
             )
             
@@ -403,9 +438,9 @@ class MainWindow(QMainWindow):
                 return False
             
             # Привязываем к окну
-            sink = self.pipeline.get_by_name("vsink")
-            if sink and self.video_window_id:
-                sink.set_window_handle(self.video_window_id)
+            self.video_sink = self.pipeline.get_by_name("vsink")
+            if self.video_sink and self.video_window_id:
+                self.video_sink.set_window_handle(self.video_window_id)
             
             bus = self.pipeline.get_bus()
             bus.add_signal_watch()
@@ -423,9 +458,13 @@ class MainWindow(QMainWindow):
             
             if state_result[0] == Gst.StateChangeReturn.SUCCESS:
                 self.btn_play.setEnabled(True)
-                self.btn_record.setEnabled(True)
+                self.btn_record.setEnabled(False)  # Запись недоступна для файлов
                 self.btn_zoom_in.setEnabled(True)
                 self.btn_zoom_out.setEnabled(True)
+                self.btn_pan_left.setEnabled(True)
+                self.btn_pan_right.setEnabled(True)
+                self.btn_pan_up.setEnabled(True)
+                self.btn_pan_down.setEnabled(True)
                 
                 # Скрываем текстовый label
                 self.video_status_label.hide()
@@ -454,6 +493,7 @@ class MainWindow(QMainWindow):
             pipeline_str = (
                 'videotestsrc pattern=ball ! '
                 'videoconvert ! '
+                'videoscale ! '
                 'xvimagesink name=vsink'
             )
             
@@ -466,9 +506,9 @@ class MainWindow(QMainWindow):
                 return False
             
             # Привязываем к окну
-            sink = self.pipeline.get_by_name("vsink")
-            if sink and self.video_window_id:
-                sink.set_window_handle(self.video_window_id)
+            self.video_sink = self.pipeline.get_by_name("vsink")
+            if self.video_sink and self.video_window_id:
+                self.video_sink.set_window_handle(self.video_window_id)
             
             bus = self.pipeline.get_bus()
             bus.add_signal_watch()
@@ -486,9 +526,13 @@ class MainWindow(QMainWindow):
             
             if state_result[0] == Gst.StateChangeReturn.SUCCESS:
                 self.btn_play.setEnabled(True)
-                self.btn_record.setEnabled(True)
+                self.btn_record.setEnabled(False)  # Запись недоступна для тестового источника
                 self.btn_zoom_in.setEnabled(True)
                 self.btn_zoom_out.setEnabled(True)
+                self.btn_pan_left.setEnabled(True)
+                self.btn_pan_right.setEnabled(True)
+                self.btn_pan_up.setEnabled(True)
+                self.btn_pan_down.setEnabled(True)
                 
                 # Скрываем текстовый label
                 self.video_status_label.hide()
@@ -501,6 +545,61 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.status_label.setText(f"Ошибка: {str(e)}")
             return False
+    
+    def apply_zoom_and_pan(self):
+        """Применение масштаба и панорамирования к видео"""
+        if not self.video_sink:
+            return
+        
+        try:
+            # Получаем размер контейнера
+            container_width = self.video_container.width()
+            container_height = self.video_container.height()
+            
+            if container_width <= 0 or container_height <= 0:
+                return
+            
+            # Рассчитываем размер видео с учетом масштаба
+            video_width = int(container_width / self.zoom_factor)
+            video_height = int(container_height / self.zoom_factor)
+            
+            # Ограничиваем панорамирование
+            self.pan_x = max(0.0, min(1.0, self.pan_x))
+            self.pan_y = max(0.0, min(1.0, self.pan_y))
+            
+            # Рассчитываем смещение для панорамирования
+            pan_offset_x = int((container_width - video_width) * self.pan_x)
+            pan_offset_y = int((container_height - video_height) * self.pan_y)
+            
+            # Применяем к video sink
+            self.video_sink.set_property("render-rectangle", 
+                                        f"{pan_offset_x},{pan_offset_y},{video_width},{video_height}")
+            
+            print(f"Применен zoom: {self.zoom_factor:.2f}, pan: ({self.pan_x:.2f}, {self.pan_y:.2f})")
+            print(f"  Размер: {video_width}x{video_height}, Смещение: {pan_offset_x},{pan_offset_y}")
+            
+        except Exception as e:
+            print(f"Ошибка применения zoom/pan: {e}")
+    
+    def zoom_in(self):
+        """Увеличение масштаба"""
+        if self.zoom_factor < 3.0:
+            self.zoom_factor = min(3.0, self.zoom_factor + 0.2)
+            self.zoom_label.setText(f"{int(self.zoom_factor * 100)}%")
+            self.apply_zoom_and_pan()
+    
+    def zoom_out(self):
+        """Уменьшение масштаба"""
+        if self.zoom_factor > 1.0:
+            self.zoom_factor = max(1.0, self.zoom_factor - 0.2)
+            self.zoom_label.setText(f"{int(self.zoom_factor * 100)}%")
+            self.apply_zoom_and_pan()
+    
+    def adjust_pan(self, delta_x, delta_y):
+        """Регулировка панорамирования"""
+        self.pan_x += delta_x
+        self.pan_y += delta_y
+        self.apply_zoom_and_pan()
     
     def toggle_play(self):
         """Включение/выключение воспроизведения"""
@@ -549,6 +648,10 @@ class MainWindow(QMainWindow):
             self.btn_record.setEnabled(False)
             self.btn_zoom_in.setEnabled(False)
             self.btn_zoom_out.setEnabled(False)
+            self.btn_pan_left.setEnabled(False)
+            self.btn_pan_right.setEnabled(False)
+            self.btn_pan_up.setEnabled(False)
+            self.btn_pan_down.setEnabled(False)
             self.connect_btn.setEnabled(True)
             self.connect_btn.setText("Подключиться")
             self.status_label.setText("Остановлено")
@@ -557,17 +660,12 @@ class MainWindow(QMainWindow):
             self.video_status_label.show()
             self.video_status_label.setText("Видео остановлено")
     
-    def zoom_in(self):
-        """Увеличение масштаба"""
-        if self.zoom_factor < 3.0:
-            self.zoom_factor = min(3.0, self.zoom_factor + 0.1)
-            self.zoom_label.setText(f"{int(self.zoom_factor * 100)}%")
-    
-    def zoom_out(self):
-        """Уменьшение масштаба"""
-        if self.zoom_factor > 1.0:
-            self.zoom_factor = max(1.0, self.zoom_factor - 0.1)
-            self.zoom_label.setText(f"{int(self.zoom_factor * 100)}%")
+    def resizeEvent(self, event):
+        """Обработка изменения размера окна"""
+        super().resizeEvent(event)
+        # Применяем масштаб и панорамирование при изменении размера
+        if self.video_sink:
+            QTimer.singleShot(100, self.apply_zoom_and_pan)
     
     def toggle_record(self):
         """Включение/выключение записи"""
@@ -579,8 +677,8 @@ class MainWindow(QMainWindow):
             filename, _ = QFileDialog.getSaveFileName(
                 self,
                 "Сохранить запись",
-                f"record_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
-                "MP4 files (*.mp4)"
+                f"record_{datetime.now().strftime('%Y%m%d_%H%M%S')}.avi",
+                "AVI files (*.avi)"
             )
             
             if filename:
@@ -595,13 +693,14 @@ class MainWindow(QMainWindow):
             ip = self.udp_ip.text().strip()
             port = self.udp_port.value()
             
-            # Простой пайплайн записи
+            # Создаем пайплайн записи, который читает из того же UDP источника
+            # но НЕ останавливает основной пайплайн
             record_pipeline_str = (
                 f'udpsrc port={port} ! '
                 'application/x-rtp ! '
                 'rtph264depay ! '
                 'h264parse ! '
-                'mp4mux ! '
+                'avimux ! '
                 f'filesink location="{filename}"'
             )
             
@@ -621,8 +720,12 @@ class MainWindow(QMainWindow):
                     font-weight: bold;
                 }
             """)
-            self.record_label.setText(f"Запись: {os.path.basename(filename)}")
-            self.status_label.setText(f"Запись: {os.path.basename(filename)}")
+            
+            filename_display = os.path.basename(filename)
+            self.record_label.setText(f"Запись: {filename_display}")
+            self.status_label.setText(f"Запись: {filename_display}")
+            
+            print("Запись начата")
             
         except Exception as e:
             QMessageBox.critical(self, "Ошибка записи", f"Не удалось начать запись: {e}")
@@ -632,9 +735,16 @@ class MainWindow(QMainWindow):
         if self.record_pipeline and self.is_recording:
             try:
                 print("Остановка записи...")
+                # Отправляем EOS и ждем
                 self.record_pipeline.send_event(Gst.Event.new_eos())
+                
+                # Ждем завершения записи
+                bus = self.record_pipeline.get_bus()
+                bus.timed_pop_filtered(Gst.CLOCK_TIME_NONE, Gst.MessageType.EOS)
+                
                 time.sleep(0.5)
                 self.record_pipeline.set_state(Gst.State.NULL)
+                self.record_pipeline = None
                 
             except Exception as e:
                 print(f"Ошибка при остановке записи: {e}")
